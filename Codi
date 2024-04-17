@@ -1,0 +1,464 @@
+library(readr)
+library(tidyverse)
+library(caret)
+library(tableone)
+library(ggplot2)
+library(ggpubr)
+library(rpart)
+library(rpart.plot)
+library(pROC)
+
+##########################################
+######### VALIDACIÓ DE LES DADES #########
+##########################################
+
+data <- read_csv("Data.csv")
+dim(data) #991.346 x 24
+
+###Busquem duplicats:
+
+data<-unique(data) 
+
+data$hear_left<- as.factor(data$hear_left)
+data$hear_right<- as.factor(data$hear_right)
+data$urine_protein<- as.factor(data$urine_protein)
+data$SMK_stat_type_cd<- as.factor(data$SMK_stat_type_cd)
+data$DRK_YN<- as.factor(data$DRK_YN)
+
+any(is.na(data))  # No tenim cap NA.
+dim(data)    # Tenimn 991.320 dades i 24 variables.
+
+
+### --> Validació:
+
+summary(data)
+
+data<-subset(data, sight_left!=9.9 & sight_right!=9.9 & waistline!=999)
+dim(data) #19.707 individus.     
+
+summary(data) 
+
+##### Mirem si tenim predictors amb poca variabilitat:
+nearZeroVar(data, saveMetrics= TRUE)
+
+  #Les variables amb poca variabilitat son: 
+            #urine_protein
+            #hear_left
+            #hear_right
+
+data<-subset(data, select = -c(urine_protein,hear_left,hear_right))
+
+##### Predictors correlacionats:
+
+matcor<-cor(data[,2:19])
+alt_cor<- sum(abs(matcor[upper.tri(matcor)]) > .80)
+alt_cor
+
+#->Correlació alta entre Tot_Chole i LDL_chole, en concret 0.877.
+
+data<- subset(data, select = -c(tot_chole))
+dim(data) 
+
+## -> Hem passat de tenir 24 variables a 20.
+
+table(data$DRK_YN)  #Tenim dades balancejades.
+
+####################################
+######## ANÀLISI DESCRIPTIU ########
+####################################
+
+ggplot(data, aes(x=age, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+ xlab("Edat (en anys)")
+
+dades_homes<- subset(data, sex=="Male")
+dades_dones<- subset(data, sex=="Female")
+
+#### Hemoglobina
+
+ggplot(data, aes(x=hemoglobin, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+ xlab("Nivells d'hemoglobina (sense estratificar)")
+
+
+hemoglobina_homes<-ggplot(dades_homes, aes(x=hemoglobin, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  geom_vline(xintercept=c(13.2,16.6),lwd=0.5,colour="red")+
+  xlab("Nivells d'hemoglobina (Homes)")
+
+hemoglobina_dones<-ggplot(dades_dones, aes(x=hemoglobin, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  geom_vline(xintercept=c(11.6,15),lwd=0.5,colour="red")+
+  xlab("Nivells d'hemoglobina (Dones)")
+
+ggarrange(hemoglobina_homes,hemoglobina_dones)
+
+####### Gamma GTP #####
+
+ggplot(data, aes(x=log(gamma_GTP), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  xlab("Nivells de Gamma GTP")
+
+gamma_homes<-ggplot(dades_homes, aes(x=log(gamma_GTP), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  geom_vline(xintercept=c(log(8),log(61)),lwd=0.5,colour="red")+
+  xlab("Nivells de Gamma GTP (Homes)")
+
+gamma_dones<-ggplot(dades_dones, aes(x=log(gamma_GTP), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  geom_vline(xintercept=c(log(5),log(36)),lwd=0.5,colour="red")+
+  xlab("Nivells de Gamma GTP (Dones)")
+
+ggarrange(gamma_homes, gamma_dones)
+
+
+###### Sight
+
+dreta<-ggplot(data, aes(x=(sight_right), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  geom_vline(xintercept=c((0.8),(1.20)),lwd=0.5,colour="red")+
+  xlab("Sight Right")
+
+esquerra<-ggplot(data, aes(x=(sight_left), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  geom_vline(xintercept=c((0.80),(1.20)),lwd=0.5,colour="red")+
+  xlab("Sight Left")
+
+ggarrange(dreta, esquerra)
+
+######
+ggplot(data, aes(x=weight, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+ xlab("Pes (sense estratificar)")
+
+
+pes_homes<-ggplot(dades_homes, aes(x=weight, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  xlab("Pes (Homes)")
+
+pes_dones<-ggplot(dades_dones, aes(x=weight, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  xlab("Pes (Dones)")
+
+ggarrange(pes_homes,pes_dones)
+
+
+##############
+
+colesterol<-ggplot(data, aes(x=log(HDL_chole), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+ xlab("Nivells de colesterol LDH (sense estratificar)")
+
+
+colesterol_homes<-ggplot(dades_homes, aes(x=log(HDL_chole), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  geom_vline(xintercept=log(40),lwd=0.5,colour="red")+
+  xlab("Nivells de colesterol LDH (Homes)")
+
+colesterol_dones<-ggplot(dades_dones, aes(x=log(HDL_chole), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  geom_vline(xintercept=log(50),lwd=0.5,colour="red")+
+  xlab("Nivells de colesterol LDH (Dones)")
+
+ggarrange(colesterol_homes,colesterol_dones)
+
+#####
+
+ggplot(data, aes(x=height, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+ xlab("Altura (sense estratificar)")
+
+
+altura_homes<-ggplot(dades_homes, aes(x=height, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  xlab("Altura (Homes)")
+
+altura_dones<-ggplot(dades_dones, aes(x=height, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  xlab("Altura (Dones)")
+
+ggarrange(altura_homes, altura_dones)
+
+#######
+
+triglicerids<-ggplot(data, aes(x=log(triglyceride), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+ xlab("Nivells de triglycerids (sense estratificar)")+
+  geom_vline(xintercept=log(150),lwd=0.5,colour="red")
+  
+
+####################
+
+SBP<-ggplot(data, aes(x=SBP, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+ xlab("SBP (sense estratificar)")
+
+SBP_HOMES<-ggplot(dades_homes, aes(x=SBP, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  xlab("SBP (Homes)")
+
+SBP_DONES<-ggplot(dades_dones, aes(x=SBP, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  xlab("SBP (Dones)")
+
+ggarrange(SBP_HOMES, SBP_DONES)
+
+##################
+
+DBP<-ggplot(data, aes(x=DBP, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+ xlab("DBP (sense estratificar)")
+
+DBP_HOMES<-ggplot(dades_homes, aes(x=DBP, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  xlab("DBP (Homes)")
+
+DBP_DONES<-ggplot(dades_dones, aes(x=DBP, color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+
+  xlab("DBP (Dones)")
+
+ggarrange(DBP_HOMES, DBP_DONES)
+
+
+################
+
+SGOT_ALT<-ggplot(data, aes(x=log(SGOT_ALT), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+ xlab("SGOT ALT (sense estratificar)")+
+  geom_vline(xintercept=c(log(7),log(55)),lwd=0.5,colour="red")
+
+
+#################
+
+SGOT_AST<-ggplot(data, aes(x=log(SGOT_AST), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+ xlab("SGOT_AST (sense estratificar)")+
+  geom_vline(xintercept=c(log(8),log(48)),lwd=0.5,colour="red")
+
+
+################
+
+BLDS<-ggplot(data, aes(x=log(BLDS), color=DRK_YN, fill=DRK_YN)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5,position="identity")+ xlab("BLDS (sense estratificar)")+
+  geom_vline(xintercept=c(log(75),log(110)),lwd=0.5,colour="red")
+
+
+
+#### Proves estadístiques:
+
+CreateTableOne(data=data, var=c("hemoglobin","HDL_chole"), strat=c("DRK_YN","sex"))
+
+CreateTableOne(data=data, var=c("gamma_GTP","triglyceride","SGOT_ALT","height",
+                                "weight","waistline"), strat=c("DRK_YN"))
+
+##---------
+
+Male_N<-subset(data, sex=="Male" & DRK_YN=="N")
+Male_Y<-subset(data, sex=="Male" & DRK_YN=="Y")
+
+Fem_N<-subset(data, sex=="Female" & DRK_YN=="N")
+Fem_Y<-subset(data, sex=="Female" & DRK_YN=="Y")
+
+#### Estandardització de les dades:
+
+data_num<-subset(data, select = -c(sex, SMK_stat_type_cd, DRK_YN))
+data_estand<-scale(data_num, center = TRUE, scale = TRUE)
+
+data<- cbind(data_estand,subset(data, select = c(sex, SMK_stat_type_cd, DRK_YN)))
+
+
+#####################################################
+############## ANÀLISI PRINCIPAL ####################
+#####################################################
+
+
+### --> Reduim dades:
+
+set.seed(3568)
+reduccio<-createDataPartition(y=data$DRK_YN, p=0.02, list=FALSE) 
+data<- data[reduccio,] 
+dim(data) # 19.712 individus.
+
+############ RANDOM FOREST #############
+
+#Partició dades: 80% train i 20% test.
+set.seed(5678)
+particio<-createDataPartition(y=data$DRK_YN, p=0.8, list=FALSE) 
+
+train<- data[particio,]
+dim(train) 
+test<- data[-particio,]
+dim(test) 
+
+objecte_test<- trainControl(method = "cv", number = 10,savePredictions = "final",
+                            classProbs = TRUE, summaryFunction = twoClassSummary)
+
+set.seed(987)
+random_forest <- train(DRK_YN ~ ., method="rf", metric= "ROC",
+                       tuneGrid=expand.grid(mtry=3:15),
+                       trControl=objecte_test, num.trees=400, data=train)
+
+plot(random_forest)
+
+
+## -----> RENDIMENT:
+
+prediccions <- predict(random_forest, newdata = test, type = "raw")
+(conf_matrix <- confusionMatrix(prediccions, test$DRK_YN, positive="Y"))
+
+pred.roc1<- predict(random_forest, newdata = test, type = "prob")[,"Y"]
+                                                                  
+roc(test$DRK_YN, pred.roc1, print.auc=TRUE, 
+    ci=TRUE,
+    plot=TRUE)
+
+#Variables mes importants:
+plot(varImp(random_forest), main="Importància de les variables (Model Random Forest)")
+
+#### Reajustament Random Forest amb les variables més importants:
+
+train_select<-subset(train, select = c("DRK_YN","gamma_GTP","hemoglobin","HDL_chole")) 
+test_select<-subset(test, select = c("DRK_YN","gamma_GTP","hemoglobin","HDL_chole")) 
+
+set.seed(987)
+random_forest2 <- train(DRK_YN ~ ., method="rf", metric= "ROC",
+                       trControl=objecte_test, num.trees=400, data=train_select)
+
+prediccions2 <- predict(random_forest2, newdata = test_select, type = "raw")
+(conf_matrix2 <- confusionMatrix(prediccions2, test_select$DRK_YN, positive="Y"))
+
+pred.roc2<- predict(random_forest2, newdata = test_select, type = "prob")[,"Y"]
+
+roc(test_select$DRK_YN, pred.roc2, print.auc=TRUE, 
+    ci=TRUE,
+    plot=TRUE)
+
+####--> Comparació corbes test deLong (p-valor<0.001):
+
+roc.test(roc(test$DRK_YN, pred.roc1, print.auc=TRUE, 
+             ci=TRUE,
+             plot=TRUE),
+         roc(test_select$DRK_YN, pred.roc2, print.auc=TRUE, 
+             ci=TRUE,
+             plot=TRUE)
+         )
+
+############# BAGGED TREE #######################
+set.seed(123)
+bagged_tree<- train(DRK_YN ~ ., method="treebag", metric="ROC", trControl=objecte_test, data=train)
+prediccions_bagged<- predict(bagged_tree, newdata=test, type="raw")
+(conf_matrix_bag<- confusionMatrix(prediccions_bagged, test$DRK_YN, positive="Y"))
+
+pred.roc3<- predict(bagged_tree, newdata = test, type = "prob")[,"Y"]
+
+roc(test$DRK_YN, pred.roc3, print.auc=TRUE, 
+    ci=TRUE,
+    plot=TRUE)
+
+#Variables mes importants:
+plot(varImp(bagged_tree), main="Importància de les variables (Model Bagged Tree)")
+
+#--------------------------------------------------------
+set.seed(123)
+bagged_tree2<- train(DRK_YN ~ ., method="treebag", metric="ROC", trControl=objecte_test, data=train_select)
+prediccions_bagged2<- predict(bagged_tree2, newdata=test_select, type="raw")
+(conf_matrix_bag2<- confusionMatrix(prediccions_bagged2, test_select$DRK_YN, positive="Y"))
+
+pred.roc4<- predict(bagged_tree2, newdata = test_select, type = "prob")[,"Y"]
+
+roc(test_select$DRK_YN, pred.roc4, print.auc=TRUE, 
+    ci=TRUE,
+    plot=TRUE)
+
+
+###--> Comparació curves ROC (p-valor<0.001).
+
+roc.test(roc(test$DRK_YN, pred.roc3, print.auc=TRUE, 
+             ci=TRUE,
+             plot=TRUE),
+         roc(test_select$DRK_YN, pred.roc4, print.auc=TRUE, 
+             ci=TRUE,
+             plot=TRUE)
+         
+         )
+
+
+########## ARBRE DE CLASSIFICACIÓ ##############
+
+##-----------------> Amb totes les variables:
+
+set.seed(578)
+oj_mdl_cart_full <- rpart(formula = DRK_YN ~ ., data = train, method = "class",cp =0.0001)
+
+plotcp(oj_mdl_cart_full, upper = "splits")
+printcp(oj_mdl_cart_full)   
+
+oj_mdl_cart <- prune(
+  oj_mdl_cart_full,
+  cp = oj_mdl_cart_full$cptable[oj_mdl_cart_full$cptable[, 2] == 9, "CP"]
+)
+
+rpart.plot(oj_mdl_cart, yesno = TRUE)
+
+prediccions_arbreclass<- predict(oj_mdl_cart, newdata=test, type="class")
+(conf_matrix_bag<- confusionMatrix(prediccions_arbreclass, test$DRK_YN,positive = "Y"))
+
+pred.roc5<- predict(oj_mdl_cart, newdata = test, type = "prob")[,"Y"]
+
+roc(test$DRK_YN, pred.roc5, print.auc=TRUE, 
+    ci=TRUE,
+    plot=TRUE)
+
+
+#---------------------------------------------------------------------------------
+set.seed(578)
+oj_mdl_cart_full2 <- rpart(formula = DRK_YN ~ ., data = train_select, method = "class",cp =0.0001)
+
+plotcp(oj_mdl_cart_full2, upper = "splits")
+printcp(oj_mdl_cart_full2)  
+
+oj_mdl_cart2 <- prune(
+  oj_mdl_cart_full2,
+  cp = oj_mdl_cart_full2$cptable[oj_mdl_cart_full2$cptable[, 2] == 19, "CP"]
+)
+
+rpart.plot(oj_mdl_cart2, yesno = TRUE)
+
+prediccions_arbreclass2<- predict(oj_mdl_cart2, newdata=test_select, type="class")
+(conf_matrix_bag<- confusionMatrix(prediccions_arbreclass2, test_select$DRK_YN,positive = "Y"))
+
+pred.roc6<- predict(oj_mdl_cart2, newdata = test_select, type = "prob")[,"Y"]
+
+roc(test_select$DRK_YN, pred.roc6, print.auc=TRUE, 
+    ci=TRUE,
+    plot=TRUE)
+
+
+#### Comparació de les dues curves ROC (p-valor<0.001):
+
+roc.test(roc(test$DRK_YN, pred.roc5, print.auc=TRUE, 
+             ci=TRUE,
+             plot=TRUE),
+         roc(test_select$DRK_YN, pred.roc6, print.auc=TRUE, 
+             ci=TRUE,
+             plot=TRUE))
+
+
+###### Comparacions corbes:
+
+#--> TOTS:
+
+#p-valor<0.001
+roc.test(roc(test$DRK_YN, pred.roc1, print.auc=TRUE,ci=TRUE,plot=TRUE),
+        roc(test$DRK_YN, pred.roc3, print.auc=TRUE, ci=TRUE, plot=TRUE))
+#p-valor<0.001
+roc.test(roc(test$DRK_YN, pred.roc1, print.auc=TRUE,ci=TRUE,plot=TRUE),
+         roc(test$DRK_YN, pred.roc5, print.auc=TRUE, ci=TRUE, plot=TRUE))
+#p-valor<0.001
+roc.test(roc(test$DRK_YN, pred.roc3, print.auc=TRUE,ci=TRUE,plot=TRUE),
+         roc(test$DRK_YN, pred.roc5, print.auc=TRUE, ci=TRUE, plot=TRUE))
+
+
+#--> Select
+
+#p-valor<0.001
+roc.test(roc(test$DRK_YN, pred.roc2, print.auc=TRUE,ci=TRUE,plot=TRUE),
+         roc(test$DRK_YN, pred.roc4, print.auc=TRUE, ci=TRUE, plot=TRUE))
+
+#p-valor=0.02367
+roc.test(roc(test$DRK_YN, pred.roc2, print.auc=TRUE,ci=TRUE,plot=TRUE),
+         roc(test$DRK_YN, pred.roc6, print.auc=TRUE, ci=TRUE, plot=TRUE))
+
+#p-valor<0.001
+roc.test(roc(test$DRK_YN, pred.roc4, print.auc=TRUE,ci=TRUE,plot=TRUE),
+         roc(test$DRK_YN,pred.roc6 , print.auc=TRUE, ci=TRUE, plot=TRUE))
